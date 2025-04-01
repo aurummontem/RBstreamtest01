@@ -1,0 +1,531 @@
+import pandas as pd
+
+# ------------------ Data Loading ------------------
+
+# File paths
+daily_activity_file = r"I:\Bingham\Ryan Bingham_Daily Activity_1.1.2020 - 2.28.2025_C.xlsx"
+titles_file = r"I:\Bingham\Ryan Bingham_Titles - 1.1.2020 - 2.28.2025.xlsx"
+us_markets_file = r"I:\Bingham\US Markets - Ryan Bingham_Activity by Location - 1.1.2020 - 2.28.2025.xlsx"
+ww_markets_file = r"I:\Bingham\WW - Ryan Bingham_Activity by Location - 1.1.2020 - 2.28.2025.xlsx"
+ww_daily_activity_file = r"I:\Bingham\WW_Ryan Bingham_Daily Activity_1.1.2020 - 2.28.2025_C.xlsx"
+wwactivity_LARR_file = r"I:\Bingham\WW Live At Red Rocks_Ryan Bingham Feat. The Texas Gentlemen_Activity Over Time_ 1.1.2020 - 2.28.2025.xlsx"
+usmarkets_LARR_file = r"I:\Bingham\LARR - US Markets - through 2.28.2025.xlsx"
+titles_LARR_file = r"I:\Bingham\LARR_Titles - 1.1.2020 - 2.28.2025.xlsx"
+
+
+# Load data
+daily_activity_df = pd.read_excel(daily_activity_file)
+titles_df = pd.read_excel(titles_file, sheet_name=3)
+us_markets_df = pd.read_excel(us_markets_file)
+ww_markets_df = pd.read_excel(ww_markets_file)
+ww_daily_activity_df = pd.read_excel(ww_daily_activity_file)
+wwactivity_LARR_df = pd.read_excel(wwactivity_LARR_file)
+usmarkets_LARR_df = pd.read_excel(usmarkets_LARR_file, sheet_name='Geography')
+titles_LARR_df = pd.read_excel(titles_LARR_file)
+
+# Convert date columns to datetime
+daily_activity_df['Date'] = pd.to_datetime(daily_activity_df['Date'])
+ww_daily_activity_df['Date'] = pd.to_datetime(ww_daily_activity_df['Date'])
+
+# Display previews to confirm data is loaded correctly
+print("Preview of WW Daily Activity Data:")
+print(ww_daily_activity_df.head())
+
+print("Preview of US Daily Activity Data:")
+print(daily_activity_df.head())
+
+print("Preview of Titles Data:")
+print(titles_df.head())
+
+print("Preview of US Markets Data:")
+print(us_markets_df.head())
+
+print("Preview of WW Markets Data:")
+print(ww_markets_df.head())
+
+
+
+
+from dash import Dash, dcc, html, Input, Output
+import dash_bootstrap_components as dbc
+import plotly.express as px
+import pandas as pd
+import base64
+import re
+
+# Initialize the Dash app
+app = Dash(__name__, external_stylesheets=[dbc.themes.BOOTSTRAP])
+
+# Load your logo and encode it
+logo_path = 'I:\\Bingham\\logo-2-h.png'  # Adjust to your logo path
+encoded_logo = base64.b64encode(open(logo_path, 'rb').read()).decode('ascii')
+
+# ------------------ Overview Tab Data Preparation ------------------
+
+# 1. Annual, Monthly, and Daily Average Streams
+annual_streams = ww_daily_activity_df.groupby(ww_daily_activity_df['Date'].dt.year)['Streams'].sum()
+annual_avg_streams = round(annual_streams.mean())
+monthly_streams = ww_daily_activity_df.groupby([ww_daily_activity_df['Date'].dt.year, ww_daily_activity_df['Date'].dt.month])['Streams'].sum()
+monthly_avg_streams = round(monthly_streams.mean())
+daily_avg_streams = round(ww_daily_activity_df['Streams'].mean())
+
+df_average_streams = pd.DataFrame({
+    "Metric": ["Annual Average Streams", "Monthly Average Streams", "Daily Average Streams"],
+    "Value": [annual_avg_streams, monthly_avg_streams, daily_avg_streams]
+})
+
+df_average_streams['Value'] = df_average_streams['Value'].apply(lambda x: f"{x:,.0f}")
+
+# 2. Top 10 US Markets
+us_markets_df = us_markets_df[us_markets_df['Market'] != 'Markets Total']
+us_top_markets = us_markets_df.groupby('Market')['Streams'].sum().nlargest(10).reset_index()
+us_top_markets['Streams'] = us_top_markets['Streams'].apply(lambda x: f"{x:,.0f}")
+us_top_markets['Rank'] = range(1, len(us_top_markets) + 1)
+
+# 3. Top 20 Most-Streamed Titles
+top_titles = titles_df.groupby('Title')['Streams'].sum().nlargest(20).reset_index()
+top_titles['Streams'] = top_titles['Streams'].apply(lambda x: f"{x:,.0f}")
+top_titles['Rank'] = range(1, len(top_titles) + 1)
+
+# 4. Streams by Territory (Pie Chart)
+ww_streams = ww_markets_df.groupby('Country')['Streams'].sum().sort_values(ascending=False)
+top_countries = ww_streams.head(6)
+other_sum = ww_streams.iloc[6:].sum()
+top_countries['Unspecified'] = other_sum
+
+pie_chart = px.pie(
+    names=top_countries.index,
+    values=top_countries.values,
+    title="Streams by Territory",
+    color_discrete_sequence=["#A9B533", "#003A4F", "#FDB913", "#30C3E5", "#DF6020", "#888888"]
+)
+pie_chart.update_traces(textinfo='label+percent', hovertemplate='%{label}: %{value:,.0f}')
+
+# 5. Streaming Activity Over Time (Line Chart)
+line_chart = px.line(
+    daily_activity_df,
+    x='Date',
+    y='Streams',
+    title='Streaming Activity Over Time',
+    color_discrete_sequence=['#003A4F']
+)
+line_chart.update_layout(
+    plot_bgcolor='white',
+    paper_bgcolor='white',
+    font=dict(family="Franklin Gothic", size=14, color='#003A4F'),
+    title_font=dict(family="EB Garamond", size=22, color='#003A4F'),
+    xaxis=dict(showline=True, showgrid=False, linecolor='#003A4F'),
+    yaxis=dict(showline=True, showgrid=True, linecolor='#003A4F', gridcolor='#A9B533'),
+)
+
+# ------------------ Streaming Analysis Tab Data Preparation ------------------
+
+# Year-over-Year Percent Change Calculation
+yoy_dates = pd.date_range(start='2020-02-28', end='2025-02-28', freq='YE')
+yoy_streams = {
+    str(year): ww_daily_activity_df.loc[
+        (ww_daily_activity_df['Date'] >= pd.Timestamp(f'{year-1}-02-28')) &
+        (ww_daily_activity_df['Date'] < pd.Timestamp(f'{year}-02-28')), 
+        'Streams'].sum() for year in range(2021, 2026)
+}
+yoy_streams_df = pd.Series(yoy_streams)
+yoy_change = yoy_streams_df.pct_change().dropna() * 100
+yoy_change_df = pd.DataFrame(yoy_change, columns=['YOY Change (%)']).reset_index().rename(columns={'index': 'Year'})
+yoy_change_df['YOY Change (%)'] = yoy_change_df['YOY Change (%)'].apply(lambda x: f"{x:,.2f}%")
+
+# Descriptive Statistics
+descriptive_stats = {
+    'Total Days': [ww_daily_activity_df['Date'].nunique()],
+    'Mean Streams': [ww_daily_activity_df['Streams'].mean()],
+    'Standard Deviation': [ww_daily_activity_df['Streams'].std()],
+    'Min Daily Streams': [ww_daily_activity_df['Streams'].min()],
+    'Max Daily Streams': [ww_daily_activity_df['Streams'].max()]
+}
+descriptive_stats_df = pd.DataFrame(descriptive_stats).map(lambda x: f"{x:,.0f}")
+
+# Explanation of Indexes and Distribution Properties
+distribution_explanation_df = pd.DataFrame({
+    'Metric': [
+        'Number of Days Above Mean',
+        'Seasonal Index (by Month)',
+        'Volatility Index',
+        'Skewness',
+        'Kurtosis'
+    ],
+    'High Value': [
+        'Many days above average',
+        'Strong seasonal peaks',
+        'Large fluctuations',
+        'Right-skewed (big peaks, low daily avg)',
+        'Extreme spikes and dips'
+    ],
+    'Low Value': [
+        'Fewer days above average',
+        'Lower seasonal variance',
+        'More stable',
+        'Left-skewed (steady, few extreme lows)',
+        'More uniform activity'
+    ],
+    'Good or Bad?': [
+        'Higher is better (consistent engagement)',
+        'Depends (peaks can be leveraged, dips need attention)',
+        'Lower is better (predictability is key)',
+        'Slight positive skew is fine; extreme skew may indicate instability',
+        'Lower is better (stable engagement over time)'
+    ],
+    'Description': [
+        'Counts how often daily streams exceeded the average.',
+        'Measures recurring patterns in streams.',
+        'Measures how frequently large swings in streaming activity occur.',
+        'Indicates whether the distribution leans more towards higher or lower values.',
+        'Measures whether the distribution is more or less peaked than a normal distribution.'
+    ]
+})
+
+# Calculated Indexes and Distribution Properties
+num_days_above_mean = (ww_daily_activity_df['Streams'] > daily_avg_streams).sum()
+volatility_index = ww_daily_activity_df['Streams'].pct_change().abs().mean() * 100
+skewness = ww_daily_activity_df['Streams'].skew()
+kurtosis = ww_daily_activity_df['Streams'].kurtosis()
+
+distribution_properties = {
+    'Number of Days Above Mean': [num_days_above_mean],
+    'Volatility Index (%)': [volatility_index],
+    'Skewness': [skewness],
+    'Kurtosis': [kurtosis]
+}
+distribution_properties_df = pd.DataFrame(distribution_properties).map(lambda x: f"{x:,.2f}" if isinstance(x, float) else f"{x:,}")
+
+# Seasonal Index Calculation
+seasonal_index = ww_daily_activity_df.groupby(ww_daily_activity_df['Date'].dt.month)['Streams'].mean() / daily_avg_streams
+seasonal_index_df = seasonal_index.reset_index()
+seasonal_index_df.columns = ['Month', 'Seasonal Index']
+seasonal_index_df['Seasonal Index'] = seasonal_index_df['Seasonal Index'].apply(lambda x: f"{x:,.2f}")
+
+# ------------------ Location Data Analysis Preparation ------------------
+
+# Load US Markets Data
+us_markets_df = pd.read_excel(r"I:\Bingham\US Markets - Ryan Bingham_Activity by Location - 1.1.2020 - 2.28.2025.xlsx")
+us_markets_df.rename(columns=lambda x: x.strip(), inplace=True)
+us_markets_df = us_markets_df[us_markets_df['Market'] != 'Markets total']
+us_markets_df['Market'] = us_markets_df['Market'].astype(str)
+
+# Extract State from Market
+us_markets_df['State'] = us_markets_df['Market'].apply(
+    lambda x: re.findall(r'\b[A-Z]{2}\b', x)[-1] if re.findall(r'\b[A-Z]{2}\b', x) else None
+)
+
+# Top 10 States by Total Streams
+# Top 10 States by Total Streams
+top_10_states = us_markets_df.groupby('State')['Streams'].sum().nlargest(10).reset_index()
+top_10_states['Rank'] = range(1, 11)
+top_10_states_total = top_10_states['Streams'].sum()
+
+# Create a new column for formatted streams
+top_10_states['Formatted Streams'] = top_10_states['Streams'].apply(lambda x: f"{x:,.0f}")
+
+
+# Total Streams by State
+state_totals = us_markets_df.groupby('State')['Streams'].sum().reset_index().sort_values(by='Streams', ascending=False)
+
+# Top Cities in Each of the Top 10 States
+city_tables = []  # List to store Dash components
+
+for state in top_10_states['State']:
+    state_cities = us_markets_df[us_markets_df['State'] == state].groupby('Market')['Streams'].sum().nlargest(10).reset_index()
+    state_cities['Rank'] = range(1, len(state_cities) + 1)
+    state_cities['Streams'] = state_cities['Streams'].apply(lambda x: f"{x:,.0f}")  # Format numbers with commas
+    
+    # Store the table as a Dash component
+    city_tables.append(
+        html.Div([
+            html.H4(f"Top Cities in {state}", style={'font-family': 'EB Garamond', 'color': '#003A4F'}),
+            dbc.Table.from_dataframe(state_cities, striped=True, bordered=True, hover=True)
+        ])
+    )
+
+
+# Top Cities by State
+cities_by_state = {}
+for state in top_10_states['State']:
+    state_cities = us_markets_df[us_markets_df['State'] == state].groupby('Market')['Streams'].sum().nlargest(10).reset_index()
+    state_cities['Rank'] = range(1, len(state_cities) + 1)
+    state_cities['Streams'] = state_cities['Streams'].apply(lambda x: f"{x:,.0f}")
+    cities_by_state[state] = state_cities
+
+# Top Cities in the Pacific Northwest
+pnw_states = ['WA', 'ID', 'OR', 'WY', 'MT']
+pnw_cities_by_state = {}
+for state in pnw_states:
+    state_cities = us_markets_df[us_markets_df['State'] == state].groupby('Market')['Streams'].sum().nlargest(10).reset_index()
+    state_cities['Rank'] = range(1, len(state_cities) + 1)
+    state_cities['Streams'] = state_cities['Streams'].apply(lambda x: f"{x:,.0f}")
+    pnw_cities_by_state[state] = state_cities
+
+
+
+# ------------------ Generate Heatmaps ------------------
+
+# Remove commas and convert Streams to integers (NO NEED FOR .str.replace())
+top_10_states['Streams'] = pd.to_numeric(top_10_states['Streams'], errors='coerce').fillna(0).astype(int)
+
+# 1. Total Streams by State (For all states, not just top 10)
+all_states = us_markets_df.groupby('State')['Streams'].sum().reset_index()
+all_states['Rank'] = all_states['Streams'].rank(method='first', ascending=False).astype(int)
+all_states = all_states.sort_values(by='Streams', ascending=False)
+
+
+# Generate Heatmap for Top All States by Total Streams
+fig_states_heatmap = px.choropleth(
+    all_states,
+    locations='State',
+    locationmode='USA-states',
+    color='Streams',
+    color_continuous_scale='Viridis',
+    scope='usa',
+    title="Top 10 States by Total Streams",
+    labels={'Streams': 'Total Streams'}
+)
+
+fig_states_heatmap.update_layout(
+    geo=dict(bgcolor='white'),
+    paper_bgcolor='white',
+    font=dict(family="Franklin Gothic", size=14, color='#003A4F'),
+    title_font=dict(family="EB Garamond", size=22, color='#003A4F'),
+
+)
+
+# PNW Heatmap
+
+
+# Combine all PNW cities into a single DataFrame
+pnw_cities_combined = pd.concat(
+    [df.assign(State=state) for state, df in pnw_cities_by_state.items()],
+    ignore_index=True
+)
+
+# Clean 'Streams' column to be numeric if needed
+pnw_cities_combined['Streams'] = pnw_cities_combined['Streams'].str.replace(',', '').astype(int)
+
+# Add city coordinates manually 
+city_coordinates = {
+    'Seattle-Tacoma, WA': (47.6062, -122.3321),
+    'Spokane, WA': (47.6588, -117.4260),
+    'Yakima, WA': (46.6021, -120.5059),
+    'Boise, ID': (43.6150, -116.2023),
+    'Idaho Falls, ID': (43.4917, -112.0336),
+    'Twin Falls, ID': (42.5629, -114.4609),
+    'Portland, OR': (45.5152, -122.6784),
+    'Eugene, OR': (44.0521, -123.0868),
+    'Medford, OR': (42.3265, -122.8756),
+    'Bend, OR': (44.0582, -121.3153),
+    'Casper-Riverton, WY': (42.8666, -106.3131),
+    'Butte-Bozeman, MT': (45.6796, -111.0344),
+    'Missoula, MT': (46.8721, -113.9940),
+    'Billings, MT': (45.7833, -108.5007),
+    'Great Falls, MT': (47.5058, -111.3008),
+    'Helena, MT': (46.5891, -112.0391),
+    'Glendive, MT': (47.1050, -104.7105)
+}
+
+# Add coordinates to the DataFrame
+pnw_cities_combined['Coordinates'] = pnw_cities_combined['Market'].map(city_coordinates)
+pnw_cities_combined[['Latitude', 'Longitude']] = pd.DataFrame(
+    pnw_cities_combined['Coordinates'].tolist(), index=pnw_cities_combined.index
+)
+pnw_cities_combined.drop(columns=['Coordinates'], inplace=True)
+
+
+
+import geopandas as gpd
+
+import plotly.express as px
+
+# Generate the heatmap
+fig_pnw_cities = px.scatter_geo(
+    pnw_cities_combined,
+    lat='Latitude',
+    lon='Longitude',
+    size='Streams',
+    color='Streams',
+    hover_name='Market',
+    title='Top Cities in the Pacific Northwest (WA, ID, OR, WY, MT)',
+    scope='usa',
+    color_continuous_scale='Plasma'
+)
+
+fig_pnw_cities.update_layout(
+    geo=dict(bgcolor='white'),
+    paper_bgcolor='white',
+    font=dict(family="Franklin Gothic", size=14, color='#003A4F'),
+    title_font=dict(family="EB Garamond", size=22, color='#003A4F'),
+)
+
+
+
+
+
+
+
+
+# ------------------ Live at Red Rocks Tab Data Preparation ------------------
+
+# Total Worldwide and US Streams
+total_ww_streams = wwactivity_LARR_df['Streams'].sum()
+total_us_streams = usmarkets_LARR_df['Streams'].sum()
+
+# 1. Top 10 US Markets
+usmarkets_LARR_df = usmarkets_LARR_df[~usmarkets_LARR_df['Market'].str.contains('Total', case=False, na=False)]
+us_top_markets_LARR = usmarkets_LARR_df.groupby('Market')['Streams'].sum().nlargest(10).reset_index()
+us_top_markets_LARR['Rank'] = range(1, len(us_top_markets_LARR) + 1)
+us_top_markets_LARR['Streams'] = us_top_markets_LARR['Streams'].apply(lambda x: f"{x:,.0f}")
+
+# 2. Top 20 Most-Streamed Titles
+top_titles_LARR = titles_LARR_df.groupby('Title')['Streams'].sum().nlargest(20).reset_index()
+top_titles_LARR['Rank'] = range(1, len(top_titles_LARR) + 1)
+top_titles_LARR['Streams'] = top_titles_LARR['Streams'].apply(lambda x: f"{x:,.0f}")
+
+# 3. Daily Streaming Activity Over Time (Line Chart)
+line_chart_LARR = px.line(
+    wwactivity_LARR_df,
+    x='Date',
+    y='Streams',
+    title='Daily Streaming Activity Over Time - Live at Red Rocks',
+    color_discrete_sequence=['#003A4F']
+)
+line_chart_LARR.update_layout(
+    plot_bgcolor='white',
+    paper_bgcolor='white',
+    font=dict(family="Franklin Gothic", size=14, color='#003A4F'),
+    title_font=dict(family="EB Garamond", size=22, color='#003A4F'),
+    xaxis=dict(showline=True, showgrid=False, linecolor='#003A4F'),
+    yaxis=dict(showline=True, showgrid=True, linecolor='#003A4F', gridcolor='#A9B533'),
+)
+
+
+# ------------------ App Layout ------------------
+
+app.layout = dbc.Container([
+    html.Div([
+        html.Img(
+            src=f'data:image/png;base64,{encoded_logo}',
+            style={'position': 'absolute', 'top': '10px', 'right': '10px', 'height': '80px'}
+        ),
+        #Title
+        html.H1("Ryan Bingham Dashboard", style={
+            'text-align': 'center',
+            'font-family': 'EB Garamond',
+            'color': '#003A4F',
+            'margin-top': '20px' }),
+        
+        # Subtitle, change when updated
+        html.H2("Jan. 1, 2020 - Mar. 1, 2025", style={
+            "textAlign": "center", 
+            "font-family": "Franklin Gothic", 
+            "fontSize": 18, 
+            "color": "#A9B533"}),  
+        
+       
+    ]),
+
+    dbc.Tabs([
+        dbc.Tab(label='Overview', tab_id='tab1'),
+        dbc.Tab(label='Streaming Analysis', tab_id='tab2'),
+        dbc.Tab(label='Location Data Analysis', tab_id='tab3'),
+        dbc.Tab(label='Pacific Northwest', tab_id='tab4'),
+        dbc.Tab(label='Live at Red Rocks', tab_id='tab5')
+    ], id='tabs', active_tab='tab1'),
+
+    html.Div(id='tab-content', className='p-4')
+])
+
+# ------------------ Callbacks ------------------
+
+@app.callback(
+    Output('tab-content', 'children'),
+    [Input('tabs', 'active_tab')]
+)
+def render_tab_content(active_tab):
+    if active_tab == 'tab1':
+        return html.Div([
+            html.H3("Streaming Activity Over Time"),
+            dcc.Graph(figure=line_chart),
+            html.H3("Streams by Territory"),
+            dcc.Graph(figure=pie_chart),
+            html.H3("Average Streams"),
+            dbc.Table.from_dataframe(df_average_streams, striped=True, bordered=True, hover=True),
+            html.H3("Top 10 US Markets"),
+            dbc.Table.from_dataframe(us_top_markets, striped=True, bordered=True, hover=True),
+            html.H3("Top 20 Most-Streamed Titles"),
+            dbc.Table.from_dataframe(top_titles, striped=True, bordered=True, hover=True)
+            
+            
+        ])
+    elif active_tab == 'tab2':
+        return html.Div([
+             html.H3("Descriptive Statistics", style={'font-family': 'EB Garamond', 'color': '#003A4F'}),
+            dbc.Table.from_dataframe(descriptive_stats_df, striped=True, bordered=True, hover=True),
+
+             html.H3("Explanation of Indexes", style={'font-family': 'EB Garamond', 'color': '#003A4F', 'margin-top': '20px'}),
+            dbc.Table.from_dataframe(distribution_explanation_df, striped=True, bordered=True, hover=True),
+            
+            html.H3("Indexes and Distribution Properties", style={'font-family': 'EB Garamond', 'color': '#003A4F', 'margin-top': '20px'}),
+            dbc.Table.from_dataframe(distribution_properties_df, striped=True, bordered=True, hover=True),
+            
+            html.H3("Seasonal Index by Month", style={'font-family': 'EB Garamond', 'color': '#003A4F', 'margin-top': '20px'}),
+            dbc.Table.from_dataframe(seasonal_index_df, striped=True, bordered=True, hover=True)
+        ])
+
+    elif active_tab == 'tab3':
+        return html.Div([
+            html.H3("Streaming Across America", style={'font-family': 'EB Garamond', 'color': '#003A4F', 'margin-top': '20px'}),
+            dcc.Graph(figure=fig_states_heatmap),
+
+            html.H3("Top 10 States by Total Streams", style={'font-family': 'EB Garamond', 'color': '#003A4F'}),
+            dbc.Table.from_dataframe(
+                top_10_states[['Rank', 'State', 'Formatted Streams']],
+                striped=True,
+                bordered=True,
+                hover=True
+            ),
+            
+            html.H3("Top Cities in Top 10 States", style={'font-family': 'EB Garamond', 'color': '#003A4F', 'margin-top': '20px'}),
+            *city_tables  # This unpacks the list of city tables correctly
+
+        ])
+
+    elif active_tab == 'tab4':
+        return html.Div([
+            html.H3("Streaming Across the Pacific Northwest", style={'font-family': 'EB Garamond', 'color': '#003A4F', 'margin-top': '20px'}),
+            dcc.Graph(figure=fig_pnw_cities),
+
+            html.H3("Top Cities in Pacific Northwest (WA, ID, OR, WY, MT)", style={'font-family': 'EB Garamond', 'color': '#003A4F', 'margin-top': '20px'}),
+            *[
+                html.Div([
+                    html.H4(f"Top Cities in {state}", style={'font-family': 'EB Garamond', 'color': '#003A4F'}),
+                    dbc.Table.from_dataframe(df, striped=True, bordered=True, hover=True)
+                ])
+                for state, df in pnw_cities_by_state.items()
+            ]
+        ])
+
+    elif active_tab == 'tab5':
+        return html.Div([
+
+            html.H3("Daily Streaming Activity Over Time", style={'font-family': 'EB Garamond', 'color': '#003A4F', 'margin-top': '20px'}),
+            dcc.Graph(figure=line_chart_LARR),
+            
+            html.H3("Top 10 US Markets", style={'font-family': 'EB Garamond', 'color': '#003A4F'}),
+            dbc.Table.from_dataframe(us_top_markets_LARR, striped=True, bordered=True, hover=True),
+            
+            html.H3("Most-Streamed Titles", style={'font-family': 'EB Garamond', 'color': '#003A4F', 'margin-top': '20px'}),
+            dbc.Table.from_dataframe(top_titles_LARR, striped=True, bordered=True, hover=True)
+
+            
+        ])
+
+    return html.Div("No tab selected")
+
+# ------------------ Run the App ------------------
+app.run(mode='inline', port=8052)
+
